@@ -1,7 +1,7 @@
 <?php
 /**
- * Copyright © Magento, Inc. All rights reserved.
- * See COPYING.txt for license details.
+ * Copyright 2019 Adobe
+ * All Rights Reserved.
  */
 declare(strict_types=1);
 
@@ -11,7 +11,6 @@ use Magento\Framework\App\Filesystem\DirectoryList;
 use Magento\Framework\Exception\FileSystemException;
 use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\Filesystem;
-use Magento\Framework\Locale\ResolverInterface;
 use Magento\ImportExport\Api\Data\LocalizedExportInfoInterface;
 use Magento\ImportExport\Api\ExportManagementInterface;
 use Magento\Framework\Notification\NotifierInterface;
@@ -21,6 +20,11 @@ use Magento\Framework\Notification\NotifierInterface;
  */
 class Consumer
 {
+    /**
+     * Internal marker returned by export model for queue flow direct-to-file writes.
+     */
+    private const RESULT_WRITTEN_TO_FILE = '__RESULT_WRITTEN_TO_FILE__';
+
     /**
      * @var NotifierInterface
      */
@@ -42,30 +46,22 @@ class Consumer
     private $filesystem;
 
     /**
-     * @var ResolverInterface
-     */
-    private $localeResolver;
-
-    /**
      * Consumer constructor.
      * @param \Psr\Log\LoggerInterface $logger
      * @param ExportManagementInterface $exportManager
      * @param Filesystem $filesystem
      * @param NotifierInterface $notifier
-     * @param ResolverInterface $localeResolver
      */
     public function __construct(
         \Psr\Log\LoggerInterface $logger,
         ExportManagementInterface $exportManager,
         Filesystem $filesystem,
-        NotifierInterface $notifier,
-        ResolverInterface $localeResolver
+        NotifierInterface $notifier
     ) {
         $this->logger = $logger;
         $this->exportManager = $exportManager;
         $this->filesystem = $filesystem;
         $this->notifier = $notifier;
-        $this->localeResolver = $localeResolver;
     }
 
     /**
@@ -76,16 +72,15 @@ class Consumer
      */
     public function process(LocalizedExportInfoInterface $exportInfo)
     {
-        $currentLocale = $this->localeResolver->getLocale();
-        if ($exportInfo->getLocale()) {
-            $this->localeResolver->setLocale($exportInfo->getLocale());
-        }
-
         try {
-            $data = $this->exportManager->export($exportInfo);
             $fileName = $exportInfo->getFileName();
+            $data = $this->exportManager->export($exportInfo);
             $directory = $this->filesystem->getDirectoryWrite(DirectoryList::VAR_IMPORT_EXPORT);
-            $directory->writeFile('export/' . $fileName, $data);
+            if ($data !== self::RESULT_WRITTEN_TO_FILE) {
+                $directory->writeFile('export/' . $fileName, $data);
+            } elseif (!$directory->isFile('export/' . $fileName)) {
+                throw new LocalizedException(__('Export file was not created.'));
+            }
 
             $this->notifier->addMajor(
                 __('Your export file is ready'),
@@ -97,8 +92,6 @@ class Consumer
                 __('Error during export process occurred. Please check logs for detail')
             );
             $this->logger->critical('Something went wrong while export process. ' . $exception->getMessage());
-        } finally {
-            $this->localeResolver->setLocale($currentLocale);
         }
     }
 }
